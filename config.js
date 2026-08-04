@@ -13,7 +13,7 @@ window.CUBE_TIMER_CONFIG = {
   // Alle drei Werte findest du in deinem EmailJS-Konto (siehe README, Schritt
   // "EmailJS verbinden"). Der Empfänger (robtiel@mail.de) wird NICHT hier
   // eingetragen, sondern direkt im EmailJS-Template als "To Email" hinterlegt.
-  emailjsPublicKey: "DEIN-EMAILJS-PUBLIC-KEY",
-  emailjsServiceId: "DEIN-EMAILJS-SERVICE-ID",
-  emailjsTemplateId: "DEIN-EMAILJS-TEMPLATE-ID"
+  emailjsPublicKey: "qLpUj4SvK9R5yJ8El",
+  emailjsServiceId: "service_sl9gn9s",
+  emailjsTemplateId: "template_82b3azk"
 };
