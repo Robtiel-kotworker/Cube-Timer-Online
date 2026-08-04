@@ -5,6 +5,6 @@
 // im Browser bearbeiten – dafür ist kein Computer und kein Terminal nötig.
 // ============================================================================
 window.CUBE_TIMER_CONFIG = {
-  supabaseUrl: "https://DEIN-PROJEKT.supabase.co",
-  supabaseAnonKey: "DEIN-ANON-PUBLIC-KEY"
+  supabaseUrl: "https://jcsyikicwdzzqfbwrans.supabase.co",
+  supabaseAnonKey: "sb_publishable_82adPoK3oOJvSBAWHxJP2g_IAmf4MP-"
 };
