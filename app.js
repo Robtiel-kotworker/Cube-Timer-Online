@@ -154,59 +154,14 @@ async function sendDeveloperEmail({ userEmail, message, strikeCount, username })
 }
 
 /* ============================================================================
- * lib: Cheat-Erkennung (DevTools) & Strike-System
+ * lib: Cheat-Erkennung (eingereichte Zeit) & Strike-System
  * ----------------------------------------------------------------------------
- * Erkennungsmethode: Vergleich von window.outerWidth/Height mit innerWidth/Height.
- * Sind Entwicklertools angedockt geöffnet, ist die Differenz deutlich größer als
- * bei einem normalen Browserfenster. Das ist eine Heuristik (kein 100%-sicherer
- * Nachweis) – losgelöste DevTools-Fenster oder Remote-Debugging werden dadurch
- * nicht erkannt. Ausgelöst wird der Strike erst, wenn die Differenz 55 Sekunden
- * lang UNUNTERBROCHEN bestehen bleibt, um Fehlalarme durch kurzes Öffnen oder
- * Fenster-Größenänderungen zu vermeiden.
+ * Eine für die Bestenliste eingereichte Zeit zwischen 0 und 55 Sekunden gilt
+ * als Cheat-Verdacht und wird nicht an die Bestenliste übermittelt.
  * ==========================================================================*/
-const CHEAT_DEVTOOLS_THRESHOLD_MS = 55000;
-const CHEAT_CHECK_INTERVAL_MS = 1000;
-const CHEAT_SIZE_DIFF_PX = 160;
-
-// Zweiter, unabhängiger Auslöser: eine für die Bestenliste eingereichte Zeit,
-// die zwischen 0 und 55 Sekunden liegt, gilt ebenfalls als Cheat-Verdacht.
+// Eine für die Bestenliste eingereichte Zeit, die zwischen 0 und 55 Sekunden
+// liegt, gilt als Cheat-Verdacht.
 const CHEAT_TIME_THRESHOLD_MS = 55000;
-
-function isDevToolsLikelyOpen() {
-  const widthDiff = window.outerWidth - window.innerWidth;
-  const heightDiff = window.outerHeight - window.innerHeight;
-  return widthDiff > CHEAT_SIZE_DIFF_PX || heightDiff > CHEAT_SIZE_DIFF_PX;
-}
-
-function useDevToolsGuard(onThresholdReached, enabled) {
-  const openSinceRef = useRef(null);
-  const triggeredRef = useRef(false);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const interval = setInterval(() => {
-      const openNow = isDevToolsLikelyOpen();
-
-      if (!openNow) {
-        openSinceRef.current = null;
-        triggeredRef.current = false;
-        return;
-      }
-
-      if (openSinceRef.current === null) {
-        openSinceRef.current = Date.now();
-      }
-
-      const openForMs = Date.now() - openSinceRef.current;
-      if (openForMs >= CHEAT_DEVTOOLS_THRESHOLD_MS && !triggeredRef.current) {
-        triggeredRef.current = true;
-        onThresholdReached();
-      }
-    }, CHEAT_CHECK_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, [enabled, onThresholdReached]);
-}
 
 function useStrikes() {
   const [strikes, setStrikes] = useState(() => loadStrikes());
@@ -378,11 +333,9 @@ function Modal({ title, onClose, children }) {
   `;
 }
 
-function CheatWarningModal({ strikeCount, reason, onOk, onContactDeveloper }) {
+function CheatWarningModal({ strikeCount, onOk, onContactDeveloper }) {
   const reasonText =
-    reason === 'time'
-      ? 'Es wurde eine Zeit unter 55 Sekunden zur Bestenliste eingereicht. Solche Zeiten werden als Cheat-Verdacht eingestuft und nicht an die Bestenliste übermittelt.'
-      : 'Es wurde erkannt, dass die Entwicklertools deines Browsers länger als 55 Sekunden geöffnet waren. Das kann genutzt werden, um Zeiten in der Bestenliste zu manipulieren.';
+    'Es wurde eine Zeit unter 55 Sekunden zur Bestenliste eingereicht. Solche Zeiten werden als Cheat-Verdacht eingestuft und nicht an die Bestenliste übermittelt.';
 
   return html`
     <${Modal} title="⚠️ Ungewöhnliche Aktivität erkannt" onClose=${onOk}>
@@ -762,17 +715,8 @@ function App() {
   const [timerPhase, setTimerPhase] = useState('idle');
   const [submitNotice, setSubmitNotice] = useState(null);
   const [cheatDialog, setCheatDialog] = useState('none'); // none | warning | contact
-  const [cheatReason, setCheatReason] = useState(null); // 'devtools' | 'time'
 
   const closeModal = useCallback(() => setModal('none'), []);
-
-  const handleCheatDetected = useCallback(() => {
-    addStrike();
-    setCheatReason('devtools');
-    setCheatDialog('warning');
-  }, [addStrike]);
-
-  useDevToolsGuard(handleCheatDetected, !isLocked);
 
   const handleConfirm = useCallback(async (ms) => {
     addSolve(ms);
@@ -783,7 +727,6 @@ function App() {
     // ein Strike und der Warn-Dialog erscheint.
     if (ms > 0 && ms < CHEAT_TIME_THRESHOLD_MS) {
       addStrike();
-      setCheatReason('time');
       setCheatDialog('warning');
       return;
     }
@@ -842,7 +785,6 @@ function App() {
       ${cheatDialog === 'warning' && html`
         <${CheatWarningModal}
           strikeCount=${strikes.count}
-          reason=${cheatReason}
           onOk=${() => setCheatDialog('none')}
           onContactDeveloper=${() => setCheatDialog('contact')}
         />
