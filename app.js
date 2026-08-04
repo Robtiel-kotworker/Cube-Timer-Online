@@ -168,6 +168,10 @@ const CHEAT_DEVTOOLS_THRESHOLD_MS = 55000;
 const CHEAT_CHECK_INTERVAL_MS = 1000;
 const CHEAT_SIZE_DIFF_PX = 160;
 
+// Zweiter, unabhängiger Auslöser: eine für die Bestenliste eingereichte Zeit,
+// die zwischen 0 und 55 Sekunden liegt, gilt ebenfalls als Cheat-Verdacht.
+const CHEAT_TIME_THRESHOLD_MS = 55000;
+
 function isDevToolsLikelyOpen() {
   const widthDiff = window.outerWidth - window.innerWidth;
   const heightDiff = window.outerHeight - window.innerHeight;
@@ -374,13 +378,17 @@ function Modal({ title, onClose, children }) {
   `;
 }
 
-function CheatWarningModal({ strikeCount, onOk, onContactDeveloper }) {
+function CheatWarningModal({ strikeCount, reason, onOk, onContactDeveloper }) {
+  const reasonText =
+    reason === 'time'
+      ? 'Es wurde eine Zeit unter 55 Sekunden zur Bestenliste eingereicht. Solche Zeiten werden als Cheat-Verdacht eingestuft und nicht an die Bestenliste übermittelt.'
+      : 'Es wurde erkannt, dass die Entwicklertools deines Browsers länger als 55 Sekunden geöffnet waren. Das kann genutzt werden, um Zeiten in der Bestenliste zu manipulieren.';
+
   return html`
     <${Modal} title="⚠️ Ungewöhnliche Aktivität erkannt" onClose=${onOk}>
       <div class="flex flex-col gap-4">
         <p class="text-sm text-white leading-relaxed">
-          Es wurde erkannt, dass die Entwicklertools deines Browsers länger als 55 Sekunden
-          geöffnet waren. Das kann genutzt werden, um Zeiten in der Bestenliste zu manipulieren.
+          ${reasonText}
         </p>
         <p class="text-sm text-bad font-semibold">
           Strike ${strikeCount} von 3${strikeCount >= 3 ? ' — dein Zugriff wurde gesperrt.' : '.'}
@@ -754,11 +762,13 @@ function App() {
   const [timerPhase, setTimerPhase] = useState('idle');
   const [submitNotice, setSubmitNotice] = useState(null);
   const [cheatDialog, setCheatDialog] = useState('none'); // none | warning | contact
+  const [cheatReason, setCheatReason] = useState(null); // 'devtools' | 'time'
 
   const closeModal = useCallback(() => setModal('none'), []);
 
   const handleCheatDetected = useCallback(() => {
     addStrike();
+    setCheatReason('devtools');
     setCheatDialog('warning');
   }, [addStrike]);
 
@@ -766,14 +776,24 @@ function App() {
 
   const handleConfirm = useCallback(async (ms) => {
     addSolve(ms);
-    if (isLoggedIn && auth) {
-      const result = await submitScore(auth.username, auth.nameStyle, ms);
-      if (!result.ok && result.message) {
-        setSubmitNotice(result.message);
-        setTimeout(() => setSubmitNotice(null), 4000);
-      }
+    if (!isLoggedIn || !auth) return;
+
+    // Cheat-Verdacht: eingereichte Zeit liegt zwischen 0 und 55 Sekunden.
+    // Diese Zeit wird NICHT an die Bestenliste übermittelt, es zählt stattdessen
+    // ein Strike und der Warn-Dialog erscheint.
+    if (ms > 0 && ms < CHEAT_TIME_THRESHOLD_MS) {
+      addStrike();
+      setCheatReason('time');
+      setCheatDialog('warning');
+      return;
     }
-  }, [addSolve, auth, isLoggedIn, submitScore]);
+
+    const result = await submitScore(auth.username, auth.nameStyle, ms);
+    if (!result.ok && result.message) {
+      setSubmitNotice(result.message);
+      setTimeout(() => setSubmitNotice(null), 4000);
+    }
+  }, [addSolve, addStrike, auth, isLoggedIn, submitScore]);
 
   const chromeHidden = timerPhase === 'holding' || timerPhase === 'running';
 
@@ -822,6 +842,7 @@ function App() {
       ${cheatDialog === 'warning' && html`
         <${CheatWarningModal}
           strikeCount=${strikes.count}
+          reason=${cheatReason}
           onOk=${() => setCheatDialog('none')}
           onContactDeveloper=${() => setCheatDialog('contact')}
         />
