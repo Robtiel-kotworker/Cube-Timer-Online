@@ -75,7 +75,8 @@ function getNameStyle(id) {
 const KEYS = {
   auth: 'cubetimer.auth',
   settings: 'cubetimer.settings',
-  solves: 'cubetimer.solves'
+  solves: 'cubetimer.solves',
+  strikes: 'cubetimer.strikes'
 };
 
 const DEFAULT_SETTINGS = { timeFormat: 'seconds' };
@@ -106,6 +107,10 @@ const saveSettings = (settings) => write(KEYS.settings, settings);
 const loadSolves = () => read(KEYS.solves, []);
 const saveSolves = (solves) => write(KEYS.solves, solves);
 
+const DEFAULT_STRIKES = { count: 0, lockedAt: null };
+const loadStrikes = () => read(KEYS.strikes, DEFAULT_STRIKES);
+const saveStrikes = (strikes) => write(KEYS.strikes, strikes);
+
 /* ============================================================================
  * lib: Supabase-Client (liest Zugangsdaten aus config.js)
  * ==========================================================================*/
@@ -114,6 +119,106 @@ const isSupabaseConfigured = Boolean(
   cfg.supabaseUrl && cfg.supabaseAnonKey && !cfg.supabaseUrl.includes('DEIN-PROJEKT')
 );
 const supabase = isSupabaseConfigured ? createClient(cfg.supabaseUrl, cfg.supabaseAnonKey) : null;
+
+/* ============================================================================
+ * lib: EmailJS-Client (liest Zugangsdaten aus config.js)
+ * ==========================================================================*/
+const isEmailjsConfigured = Boolean(
+  cfg.emailjsPublicKey &&
+    cfg.emailjsServiceId &&
+    cfg.emailjsTemplateId &&
+    !String(cfg.emailjsPublicKey).includes('DEIN-EMAILJS')
+);
+
+if (isEmailjsConfigured && window.emailjs) {
+  window.emailjs.init({ publicKey: cfg.emailjsPublicKey });
+}
+
+async function sendDeveloperEmail({ userEmail, message, strikeCount, username }) {
+  if (!isEmailjsConfigured || !window.emailjs) {
+    return { ok: false, message: 'E-Mail-Versand ist nicht eingerichtet (config.js prüfen).' };
+  }
+  try {
+    await window.emailjs.send(cfg.emailjsServiceId, cfg.emailjsTemplateId, {
+      user_email: userEmail,
+      message: message || '(kein zusätzlicher Text angegeben)',
+      strike_count: String(strikeCount),
+      username: username || '(nicht eingeloggt)',
+      page_url: window.location.href,
+      sent_at: new Date().toLocaleString('de-DE')
+    });
+    return { ok: true, message: null };
+  } catch (err) {
+    return { ok: false, message: 'E-Mail konnte nicht gesendet werden. Bitte später erneut versuchen.' };
+  }
+}
+
+/* ============================================================================
+ * lib: Cheat-Erkennung (DevTools) & Strike-System
+ * ----------------------------------------------------------------------------
+ * Erkennungsmethode: Vergleich von window.outerWidth/Height mit innerWidth/Height.
+ * Sind Entwicklertools angedockt geöffnet, ist die Differenz deutlich größer als
+ * bei einem normalen Browserfenster. Das ist eine Heuristik (kein 100%-sicherer
+ * Nachweis) – losgelöste DevTools-Fenster oder Remote-Debugging werden dadurch
+ * nicht erkannt. Ausgelöst wird der Strike erst, wenn die Differenz 55 Sekunden
+ * lang UNUNTERBROCHEN bestehen bleibt, um Fehlalarme durch kurzes Öffnen oder
+ * Fenster-Größenänderungen zu vermeiden.
+ * ==========================================================================*/
+const CHEAT_DEVTOOLS_THRESHOLD_MS = 55000;
+const CHEAT_CHECK_INTERVAL_MS = 1000;
+const CHEAT_SIZE_DIFF_PX = 160;
+
+function isDevToolsLikelyOpen() {
+  const widthDiff = window.outerWidth - window.innerWidth;
+  const heightDiff = window.outerHeight - window.innerHeight;
+  return widthDiff > CHEAT_SIZE_DIFF_PX || heightDiff > CHEAT_SIZE_DIFF_PX;
+}
+
+function useDevToolsGuard(onThresholdReached, enabled) {
+  const openSinceRef = useRef(null);
+  const triggeredRef = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const interval = setInterval(() => {
+      const openNow = isDevToolsLikelyOpen();
+
+      if (!openNow) {
+        openSinceRef.current = null;
+        triggeredRef.current = false;
+        return;
+      }
+
+      if (openSinceRef.current === null) {
+        openSinceRef.current = Date.now();
+      }
+
+      const openForMs = Date.now() - openSinceRef.current;
+      if (openForMs >= CHEAT_DEVTOOLS_THRESHOLD_MS && !triggeredRef.current) {
+        triggeredRef.current = true;
+        onThresholdReached();
+      }
+    }, CHEAT_CHECK_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [enabled, onThresholdReached]);
+}
+
+function useStrikes() {
+  const [strikes, setStrikes] = useState(() => loadStrikes());
+
+  const addStrike = useCallback(() => {
+    const next = {
+      count: strikes.count + 1,
+      lockedAt: strikes.count + 1 >= 3 ? new Date().toISOString() : null
+    };
+    saveStrikes(next);
+    setStrikes(next);
+    return next;
+  }, [strikes]);
+
+  return { strikes, addStrike, isLocked: Boolean(strikes.lockedAt) };
+}
 
 /* ============================================================================
  * Hooks
@@ -265,6 +370,122 @@ function Modal({ title, onClose, children }) {
         </div>
         ${children}
       </div>
+    </div>
+  `;
+}
+
+function CheatWarningModal({ strikeCount, onOk, onContactDeveloper }) {
+  return html`
+    <${Modal} title="⚠️ Ungewöhnliche Aktivität erkannt" onClose=${onOk}>
+      <div class="flex flex-col gap-4">
+        <p class="text-sm text-white leading-relaxed">
+          Es wurde erkannt, dass die Entwicklertools deines Browsers länger als 55 Sekunden
+          geöffnet waren. Das kann genutzt werden, um Zeiten in der Bestenliste zu manipulieren.
+        </p>
+        <p class="text-sm text-bad font-semibold">
+          Strike ${strikeCount} von 3${strikeCount >= 3 ? ' — dein Zugriff wurde gesperrt.' : '.'}
+        </p>
+        <p class="text-xs text-muted">
+          Falls das ein Irrtum war (z. B. weil du selbst Entwickler bist oder ein Zubehör-Tool
+          offen hattest), kannst du den Entwickler kontaktieren.
+        </p>
+        <div class="flex gap-3 mt-1">
+          <button
+            onClick=${onOk}
+            class="flex-1 px-4 py-3 rounded-xl bg-panel border border-panelBorder text-white font-semibold active:scale-95 transition"
+          >OK<//>
+          <button
+            onClick=${onContactDeveloper}
+            class="flex-1 px-4 py-3 rounded-xl bg-accent text-black font-semibold active:scale-95 transition"
+          >Entwickler kontaktieren<//>
+        </div>
+      </div>
+    <//>
+  `;
+}
+
+function ContactDeveloperDialog({ strikeCount, username, onClose }) {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [errorMsg, setErrorMsg] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return;
+    setStatus('sending');
+    setErrorMsg(null);
+    const result = await sendDeveloperEmail({
+      userEmail: trimmedEmail,
+      message: message.trim(),
+      strikeCount,
+      username
+    });
+    if (result.ok) {
+      setStatus('sent');
+    } else {
+      setStatus('error');
+      setErrorMsg(result.message);
+    }
+  };
+
+  return html`
+    <${Modal} title="Entwickler kontaktieren" onClose=${onClose}>
+      ${status === 'sent'
+        ? html`
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-good">Danke! Deine Nachricht wurde gesendet. Der Entwickler meldet sich per E-Mail bei dir.</p>
+            <button onClick=${onClose} class="px-4 py-3 rounded-xl bg-accent text-black font-semibold active:scale-95 transition">Schließen<//>
+          </div>
+        `
+        : html`
+          <form onSubmit=${handleSubmit} class="flex flex-col gap-4">
+            <p class="text-xs text-muted">
+              Trage deine E-Mail-Adresse ein, damit der Entwickler dir antworten kann. Deine Nachricht
+              wird zusammen mit Strike-Stand und Zeitstempel an den Entwickler geschickt.
+            </p>
+            <input
+              autofocus
+              type="email"
+              required
+              value=${email}
+              onChange=${(e) => setEmail(e.target.value)}
+              placeholder="deine@email.de"
+              class="bg-base border border-panelBorder rounded-xl px-4 py-3 text-white placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+            <textarea
+              value=${message}
+              onChange=${(e) => setMessage(e.target.value)}
+              placeholder="Optional: kurze Nachricht an den Entwickler …"
+              rows="3"
+              class="bg-base border border-panelBorder rounded-xl px-4 py-3 text-white placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent resize-none"
+            ></textarea>
+            ${status === 'error' && html`<p class="text-bad text-xs">${errorMsg}</p>`}
+            <button
+              type="submit"
+              disabled=${!email.trim() || status === 'sending'}
+              class="px-4 py-3 rounded-xl bg-accent text-black font-semibold disabled:opacity-40 active:scale-95 transition"
+            >${status === 'sending' ? 'Wird gesendet …' : 'Senden'}<//>
+          </form>
+        `}
+    <//>
+  `;
+}
+
+function LockedScreen({ onContactDeveloper }) {
+  return html`
+    <div class="h-full min-h-screen flex flex-col items-center justify-center px-6 text-center gap-5">
+      <span class="text-5xl leading-none">🔒</span>
+      <h1 class="text-lg font-semibold text-white">Zugriff gesperrt</h1>
+      <p class="text-sm text-muted max-w-xs leading-relaxed">
+        Es wurden 3 von 3 Strikes wegen wiederholt erkannter Entwicklertools-Nutzung erreicht.
+        Der Timer ist auf diesem Gerät gesperrt.
+      </p>
+      <button
+        onClick=${onContactDeveloper}
+        class="px-6 py-3 rounded-xl bg-accent text-black font-semibold tracking-wide active:scale-95 transition"
+      >Entwickler kontaktieren<//>
     </div>
   `;
 }
@@ -527,12 +748,21 @@ function App() {
   const { settings, setTimeFormat } = useSettings();
   const { addSolve, stats } = useStats();
   const { entries, loading, error, submitScore } = useLeaderboard();
+  const { strikes, addStrike, isLocked } = useStrikes();
 
   const [modal, setModal] = useState('none');
   const [timerPhase, setTimerPhase] = useState('idle');
   const [submitNotice, setSubmitNotice] = useState(null);
+  const [cheatDialog, setCheatDialog] = useState('none'); // none | warning | contact
 
   const closeModal = useCallback(() => setModal('none'), []);
+
+  const handleCheatDetected = useCallback(() => {
+    addStrike();
+    setCheatDialog('warning');
+  }, [addStrike]);
+
+  useDevToolsGuard(handleCheatDetected, !isLocked);
 
   const handleConfirm = useCallback(async (ms) => {
     addSolve(ms);
@@ -546,6 +776,21 @@ function App() {
   }, [addSolve, auth, isLoggedIn, submitScore]);
 
   const chromeHidden = timerPhase === 'holding' || timerPhase === 'running';
+
+  if (isLocked) {
+    return html`
+      <div class="h-full min-h-screen flex flex-col bg-base">
+        <${LockedScreen} onContactDeveloper=${() => setCheatDialog('contact')} />
+        ${cheatDialog === 'contact' && html`
+          <${ContactDeveloperDialog}
+            strikeCount=${strikes.count}
+            username=${auth?.username ?? null}
+            onClose=${() => setCheatDialog('none')}
+          />
+        `}
+      </div>
+    `;
+  }
 
   return html`
     <div class="h-full min-h-screen flex flex-col bg-base">
@@ -572,6 +817,22 @@ function App() {
         <div class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-panel border border-panelBorder text-bad text-xs px-4 py-2 rounded-full">
           ${submitNotice}
         </div>
+      `}
+
+      ${cheatDialog === 'warning' && html`
+        <${CheatWarningModal}
+          strikeCount=${strikes.count}
+          onOk=${() => setCheatDialog('none')}
+          onContactDeveloper=${() => setCheatDialog('contact')}
+        />
+      `}
+
+      ${cheatDialog === 'contact' && html`
+        <${ContactDeveloperDialog}
+          strikeCount=${strikes.count}
+          username=${auth?.username ?? null}
+          onClose=${() => setCheatDialog('none')}
+        />
       `}
 
       ${modal === 'login' && html`<${LoginDialog} onClose=${closeModal} onSubmit=${login} />`}
