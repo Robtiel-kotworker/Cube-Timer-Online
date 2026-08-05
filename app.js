@@ -90,7 +90,7 @@ const KEYS = {
   strikes: 'cubetimer.strikes'
 };
 
-const DEFAULT_SETTINGS = { timeFormat: 'seconds' };
+const DEFAULT_SETTINGS = { timeFormat: 'minutes' };
 
 function read(key, fallback) {
   try {
