@@ -477,7 +477,7 @@ function Modal({ title, onClose, children }) {
 
 function CheatWarningModal({ strikeCount, onOk, onContactDeveloper }) {
   const reasonText =
-    'Es wurde eine Zeit unter 55 Sekunden zur Bestenliste eingereicht. Solche Zeiten werden als Cheat-Verdacht eingestuft und nicht an die Bestenliste übermittelt.';
+    'Es wurde eine ungewöhnliche Zeit zur Bestenliste eingereicht. Solche Zeiten werden als Cheat-Verdacht eingestuft und nicht an die Bestenliste übermittelt. Du erhältst 1 Strike. Bei 3 Strikes wirst du bis nach Anfrage gebannt! ';
 
   return html`
     <${Modal} title="⚠️ Ungewöhnliche Aktivität erkannt" onClose=${onOk}>
